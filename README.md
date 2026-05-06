@@ -126,3 +126,6 @@ pythonw desktop_calendar.py
 
 ---
 *Developed with PyQt5 & Lunar-Python.*
+<img width="262" height="117" alt="image" src="https://github.com/user-attachments/assets/82e027d4-d11d-498b-89ee-d334342caff1" />
+<img width="842" height="553" alt="image" src="https://github.com/user-attachments/assets/f0164c4a-082b-403b-9a6c-9dfc5d6cdf17" />
+
