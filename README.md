@@ -72,3 +72,5 @@ pythonw desktop_calendar.py
 
 ---
 *Developed with PyQt5 & Lunar-Python.*
+<img width="247" height="116" alt="image" src="https://github.com/user-attachments/assets/a5a91614-0e2e-4104-bd7b-883396b8e9fa" /><img width="846" height="563" alt="image" src="https://github.com/user-attachments/assets/6a6f97bd-56ab-42d8-9fad-b8994691d55e" />
+
