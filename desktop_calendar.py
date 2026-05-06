@@ -1,11 +1,84 @@
 import sys
+import os
 import datetime
 import calendar
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QMenu, QAction, QPushButton, QGridLayout, QFrame, QCheckBox)
+                             QLabel, QMenu, QAction, QPushButton, QGridLayout, QFrame, QCheckBox,
+                             QSystemTrayIcon, QStyle)
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal
-from PyQt5.QtGui import QFont, QCursor
+from PyQt5.QtGui import QFont, QCursor, QIcon, QPixmap, QPainter, QColor, QBrush
 from lunar_python import Lunar, Solar
+
+# ========== Windows 开机启动支持 ==========
+AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_NAME = "GeekCalendar"
+
+def get_app_launch_command():
+    """获取启动当前应用的命令字符串。
+    打包成 exe 时返回 exe 路径；以脚本方式运行时返回 pythonw + 脚本路径。"""
+    if getattr(sys, 'frozen', False):
+        return f'"{sys.executable}"'
+    else:
+        # 优先用 pythonw.exe 静默运行；找不到则退回 python.exe
+        py_dir = os.path.dirname(sys.executable)
+        pythonw = os.path.join(py_dir, 'pythonw.exe')
+        runner = pythonw if os.path.exists(pythonw) else sys.executable
+        script = os.path.abspath(sys.argv[0])
+        return f'"{runner}" "{script}"'
+
+def is_autostart_enabled():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, AUTOSTART_NAME)
+            return bool(value)
+    except (FileNotFoundError, OSError):
+        return False
+    except Exception:
+        return False
+
+def set_autostart(enable: bool):
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            if enable:
+                winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, get_app_launch_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, AUTOSTART_NAME)
+                except FileNotFoundError:
+                    pass
+        return True
+    except Exception as e:
+        print(f"设置开机启动失败: {e}")
+        return False
+
+
+def create_tray_icon():
+    """动态生成一个极客风格的日历托盘图标"""
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    
+    # 圆角背景
+    painter.setBrush(QBrush(QColor("#007ACC")))
+    painter.setPen(Qt.NoPen)
+    painter.drawRoundedRect(4, 4, 56, 56, 10, 10)
+    
+    # 顶部一条小白条
+    painter.setBrush(QBrush(QColor("#FFFFFF")))
+    painter.drawRoundedRect(4, 4, 56, 14, 10, 10)
+    
+    # 日期数字
+    painter.setPen(QColor("#FFFFFF"))
+    font = QFont("Consolas", 22, QFont.Bold)
+    painter.setFont(font)
+    today = str(datetime.date.today().day)
+    painter.drawText(pixmap.rect().adjusted(0, 8, 0, 0), Qt.AlignCenter, today)
+    
+    painter.end()
+    return QIcon(pixmap)
 
 class ClickableLabel(QLabel):
     clicked = pyqtSignal(object)
@@ -479,7 +552,115 @@ class DesktopCalendar(QWidget):
         self.calendar_window = None
         self.show_seconds = False
         self.initUI()
+        self.init_tray()
         self.oldPos = self.pos()
+    
+    def init_tray(self):
+        """初始化系统托盘图标"""
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(create_tray_icon())
+        self.tray_icon.setToolTip("极客万年历")
+        
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet("""
+            QMenu {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                border: 1px solid #3E3E42;
+                font-family: 'Microsoft YaHei';
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 25px 6px 25px;
+                border-radius: 3px;
+            }
+            QMenu::item:selected {
+                background-color: #007ACC;
+                color: white;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #3E3E42;
+                margin: 4px 8px;
+            }
+        """)
+        
+        action_show_widget = QAction("显示/隐藏 桌面时钟", self)
+        action_show_widget.triggered.connect(self.toggle_widget)
+        
+        action_show_calendar = QAction("打开万年历", self)
+        action_show_calendar.triggered.connect(self.show_calendar_window)
+        
+        self.action_autostart = QAction("开机自动启动", self)
+        self.action_autostart.setCheckable(True)
+        self.action_autostart.setChecked(is_autostart_enabled())
+        self.action_autostart.triggered.connect(self.toggle_autostart)
+        
+        action_about = QAction("关于", self)
+        action_about.triggered.connect(self.show_about)
+        
+        action_quit = QAction("退出", self)
+        action_quit.triggered.connect(QApplication.instance().quit)
+        
+        tray_menu.addAction(action_show_widget)
+        tray_menu.addAction(action_show_calendar)
+        tray_menu.addSeparator()
+        tray_menu.addAction(self.action_autostart)
+        tray_menu.addSeparator()
+        tray_menu.addAction(action_about)
+        tray_menu.addAction(action_quit)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        self.tray_icon.show()
+    
+    def on_tray_activated(self, reason):
+        # 双击托盘 = 打开大日历; 单击 = 切换桌面微件显示
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_calendar_window()
+        elif reason == QSystemTrayIcon.Trigger:
+            self.toggle_widget()
+    
+    def toggle_widget(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+    
+    def show_calendar_window(self):
+        if self.calendar_window is None:
+            self.calendar_window = CalendarWindow(self)
+        self.calendar_window.show()
+        self.calendar_window.activateWindow()
+        self.calendar_window.raise_()
+    
+    def show_about(self):
+        self.tray_icon.showMessage(
+            "极客万年历",
+            "一个极客风格的桌面万年历\n双击图标打开日历，单击切换桌面时钟",
+            QSystemTrayIcon.Information,
+            3000
+        )
+    
+    def toggle_autostart(self, checked):
+        success = set_autostart(checked)
+        if success:
+            actual = is_autostart_enabled()
+            self.action_autostart.setChecked(actual)
+            self.tray_icon.showMessage(
+                "极客万年历",
+                "已开启开机自动启动" if actual else "已关闭开机自动启动",
+                QSystemTrayIcon.Information,
+                2000
+            )
+        else:
+            self.action_autostart.setChecked(is_autostart_enabled())
+            self.tray_icon.showMessage(
+                "极客万年历",
+                "设置失败，请检查权限",
+                QSystemTrayIcon.Warning,
+                2000
+            )
 
     def initUI(self):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -580,10 +761,7 @@ class DesktopCalendar(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
-            if self.calendar_window is None:
-                self.calendar_window = CalendarWindow(self)
-            self.calendar_window.show()
-            self.calendar_window.activateWindow()
+            self.show_calendar_window()
 
     def show_context_menu(self, pos):
         menu = QMenu(self)
@@ -616,6 +794,8 @@ if __name__ == '__main__':
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # 即使所有窗口关闭，托盘仍保持存活
+    app.setWindowIcon(create_tray_icon())
     ex = DesktopCalendar()
     ex.show()
     sys.exit(app.exec_())
